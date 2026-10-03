@@ -19,19 +19,38 @@ final class Gemini {
     static final class Result {
         String text = "";
         String error;
+        int code = 200;
+        long retryMs;
 
         boolean ok() {
             return error == null;
+        }
+
+        boolean retryable() {
+            return error != null && (code == 0 || code == 429 || code >= 500);
         }
     }
 
     private Gemini() {}
 
     static Result call(Context c, String system, JSONArray contents, boolean json) {
+        String primary = Prefs.model(c);
+        Result r = once(c, primary, system, contents, json);
+        if (!r.retryable() || r.code == 0) return r;
+        String fb = Prefs.fallbackModel(c);
+        if (fb.isEmpty() || fb.equals(primary)) return r;
+        Result r2 = once(c, fb, system, contents, json);
+        if (r2.ok()) return r2;
+        if (r2.retryMs > 0 && (r.retryMs == 0 || r2.retryMs < r.retryMs)) r.retryMs = r2.retryMs;
+        return r;
+    }
+
+    private static Result once(Context c, String model, String system, JSONArray contents, boolean json) {
         Result r = new Result();
         String key = Prefs.apiKey(c).trim();
         if (key.isEmpty()) {
             r.error = "Add your Gemini API key in Settings first.";
+            r.code = -1;
             return r;
         }
         HttpURLConnection conn = null;
@@ -45,8 +64,7 @@ final class Gemini {
             body.put("contents", contents);
             body.put("generationConfig", cfg);
 
-            URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/"
-                    + Prefs.model(c) + ":generateContent");
+            URL url = new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent");
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(20000);
@@ -60,10 +78,12 @@ final class Gemini {
             }
 
             int code = conn.getResponseCode();
+            r.code = code;
             boolean good = code >= 200 && code < 300;
             String resp = readAll(good ? conn.getInputStream() : conn.getErrorStream());
             if (!good) {
                 r.error = failure(code, resp);
+                r.retryMs = retryDelay(resp);
                 return r;
             }
 
@@ -86,8 +106,10 @@ final class Gemini {
             r.text = sb.toString().trim();
             if (r.text.isEmpty()) r.error = "The model returned an empty answer.";
         } catch (IOException e) {
+            r.code = 0;
             r.error = "No connection. Check your internet and try again.";
         } catch (Exception e) {
+            r.code = -2;
             r.error = "The request failed. Please try again.";
         } finally {
             if (conn != null) conn.disconnect();
@@ -95,8 +117,21 @@ final class Gemini {
         return r;
     }
 
+    private static long retryDelay(String resp) {
+        try {
+            JSONArray d = new JSONObject(resp).getJSONObject("error").optJSONArray("details");
+            if (d == null) return 0;
+            for (int i = 0; i < d.length(); i++) {
+                String s = d.getJSONObject(i).optString("retryDelay", "");
+                if (s.endsWith("s")) return (long) (Double.parseDouble(s.substring(0, s.length() - 1)) * 1000);
+            }
+        } catch (Exception ignored) {
+        }
+        return 0;
+    }
+
     private static String failure(int code, String resp) {
-        if (code == 429) return "Quota or rate limit reached. Set an AI limit reminder and try again later.";
+        if (code == 429) return "Quota or rate limit reached.";
         try {
             return new JSONObject(resp).getJSONObject("error").optString("message", "Request failed (" + code + ")");
         } catch (Exception e) {

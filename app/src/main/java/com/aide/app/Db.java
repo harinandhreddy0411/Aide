@@ -21,6 +21,7 @@ final class Db extends SQLiteOpenHelper {
         String offsets;
         long eventId = -1;
         long calId = -1;
+        boolean done;
 
         int[] offsetArray() {
             return parse(offsets);
@@ -42,6 +43,14 @@ final class Db extends SQLiteOpenHelper {
         }
     }
 
+    static final class Job {
+        long id;
+        String kind;
+        String payload;
+        int attempts;
+        long created;
+    }
+
     static final class Note {
         long id;
         String body;
@@ -53,6 +62,9 @@ final class Db extends SQLiteOpenHelper {
         String body;
     }
 
+    private static final String JOBS_SQL = "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, "
+            + "payload TEXT, attempts INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)";
+
     private static Db instance;
 
     static synchronized Db get(Context c) {
@@ -61,13 +73,14 @@ final class Db extends SQLiteOpenHelper {
     }
 
     private Db(Context c) {
-        super(c, "aide.db", null, 1);
+        super(c, "aide.db", null, 2);
     }
 
     @Override
     public void onCreate(SQLiteDatabase d) {
         d.execSQL("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, kind TEXT NOT NULL, "
-                + "start_ms INTEGER NOT NULL, offsets TEXT, event_id INTEGER DEFAULT -1, cal_id INTEGER DEFAULT -1)");
+                + "start_ms INTEGER NOT NULL, offsets TEXT, event_id INTEGER DEFAULT -1, cal_id INTEGER DEFAULT -1, done INTEGER NOT NULL DEFAULT 0)");
+        d.execSQL(JOBS_SQL);
         d.execSQL("CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, updated INTEGER NOT NULL)");
         d.execSQL("CREATE TABLE msgs (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, body TEXT NOT NULL, "
                 + "ts INTEGER NOT NULL, summarized INTEGER NOT NULL DEFAULT 0)");
@@ -75,6 +88,10 @@ final class Db extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase d, int oldVersion, int newVersion) {
+        if (oldVersion < 2) {
+            d.execSQL("ALTER TABLE items ADD COLUMN done INTEGER NOT NULL DEFAULT 0");
+            d.execSQL(JOBS_SQL);
+        }
     }
 
     private static Item readItem(Cursor c) {
@@ -86,6 +103,7 @@ final class Db extends SQLiteOpenHelper {
         it.offsets = c.getString(c.getColumnIndexOrThrow("offsets"));
         it.eventId = c.getLong(c.getColumnIndexOrThrow("event_id"));
         it.calId = c.getLong(c.getColumnIndexOrThrow("cal_id"));
+        it.done = c.getInt(c.getColumnIndexOrThrow("done")) == 1;
         return it;
     }
 
@@ -97,6 +115,7 @@ final class Db extends SQLiteOpenHelper {
         v.put("offsets", it.offsets);
         v.put("event_id", it.eventId);
         v.put("cal_id", it.calId);
+        v.put("done", it.done ? 1 : 0);
         SQLiteDatabase d = getWritableDatabase();
         if (it.id > 0) {
             d.update("items", v, "id=?", new String[]{String.valueOf(it.id)});
@@ -111,7 +130,7 @@ final class Db extends SQLiteOpenHelper {
 
     synchronized List<Item> upcoming(long from) {
         List<Item> out = new ArrayList<>();
-        try (Cursor c = getReadableDatabase().query("items", null, "start_ms >= ?",
+        try (Cursor c = getReadableDatabase().query("items", null, "start_ms >= ? AND done = 0",
                 new String[]{String.valueOf(from)}, null, null, "start_ms ASC", "50")) {
             while (c.moveToNext()) out.add(readItem(c));
         }
@@ -196,5 +215,69 @@ final class Db extends SQLiteOpenHelper {
 
     synchronized void clearMsgs() {
         getWritableDatabase().delete("msgs", null, null);
+    }
+
+    synchronized void deleteTrailingUserMsgs() {
+        getWritableDatabase().execSQL("DELETE FROM msgs WHERE role = 'user' AND id > "
+                + "(SELECT COALESCE(MAX(id), 0) FROM msgs WHERE role = 'model')");
+    }
+
+    private List<Item> items(String where, String order, String limit) {
+        List<Item> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().query("items", null, where, null, null, null, order, limit)) {
+            while (c.moveToNext()) out.add(readItem(c));
+        }
+        return out;
+    }
+
+    synchronized List<Item> open() {
+        return items("done = 0", "start_ms ASC", "50");
+    }
+
+    synchronized List<Item> history() {
+        return items("done = 1", "start_ms DESC", "10");
+    }
+
+    synchronized long addJob(String kind, String payload) {
+        ContentValues v = new ContentValues();
+        v.put("kind", kind);
+        v.put("payload", payload);
+        v.put("attempts", 0);
+        v.put("created", System.currentTimeMillis());
+        return getWritableDatabase().insert("jobs", null, v);
+    }
+
+    synchronized List<Job> jobs() {
+        List<Job> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().query("jobs", null, null, null, null, null, "id ASC")) {
+            while (c.moveToNext()) {
+                Job j = new Job();
+                j.id = c.getLong(c.getColumnIndexOrThrow("id"));
+                j.kind = c.getString(c.getColumnIndexOrThrow("kind"));
+                j.payload = c.getString(c.getColumnIndexOrThrow("payload"));
+                j.attempts = c.getInt(c.getColumnIndexOrThrow("attempts"));
+                j.created = c.getLong(c.getColumnIndexOrThrow("created"));
+                out.add(j);
+            }
+        }
+        return out;
+    }
+
+    synchronized int jobCount(String kind) {
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM jobs WHERE kind = ?", new String[]{kind})) {
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        }
+    }
+
+    synchronized void bumpJob(long id) {
+        getWritableDatabase().execSQL("UPDATE jobs SET attempts = attempts + 1 WHERE id = ?", new Object[]{id});
+    }
+
+    synchronized void deleteJob(long id) {
+        getWritableDatabase().delete("jobs", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    synchronized void deleteJobs(String kind) {
+        getWritableDatabase().delete("jobs", "kind=?", new String[]{kind});
     }
 }

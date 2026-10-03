@@ -72,13 +72,6 @@
                     android:text="Task" />
 
                 <com.google.android.material.chip.Chip
-                    android:id="@+id/chip_sub"
-                    style="@style/Widget.Material3.Chip.Filter"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Subscription" />
-
-                <com.google.android.material.chip.Chip
                     android:id="@+id/chip_other"
                     style="@style/Widget.Material3.Chip.Filter"
                     android:layout_width="wrap_content"

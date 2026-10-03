@@ -26,7 +26,6 @@ final class Ui {
     static String kindLabel(String k) {
         if ("viva".equals(k)) return "Viva";
         if ("task".equals(k)) return "Task";
-        if ("subscription".equals(k)) return "Subscription";
         return "Other";
     }
 
@@ -48,7 +47,8 @@ final class Ui {
         Calendar n = Calendar.getInstance();
         clear(n);
         long days = Math.round((t.getTimeInMillis() - n.getTimeInMillis()) / 86400000.0);
-        if (days <= 0) return "Today";
+        if (days < 0) return "Overdue";
+        if (days == 0) return "Today";
         if (days == 1) return "Tomorrow";
         return "In " + days + " days";
     }

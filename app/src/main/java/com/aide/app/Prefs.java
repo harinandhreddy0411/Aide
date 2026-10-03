@@ -29,6 +29,17 @@ final class Prefs {
         sp(c).edit().putString("model", m == null ? "" : m.trim()).apply();
     }
 
+    static final String DEFAULT_FALLBACK = "gemini-2.5-flash";
+
+    static String fallbackModel(Context c) {
+        String m = sp(c).getString("fallback", DEFAULT_FALLBACK);
+        return m == null ? "" : m.trim();
+    }
+
+    static void setFallbackModel(Context c, String m) {
+        sp(c).edit().putString("fallback", m == null ? "" : m.trim()).apply();
+    }
+
     static long calendarId(Context c) {
         return sp(c).getLong("cal", -1L);
     }

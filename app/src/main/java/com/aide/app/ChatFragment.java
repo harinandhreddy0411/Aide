@@ -35,6 +35,8 @@ public class ChatFragment extends Fragment {
     private EditText input;
     private View progress;
     private View send;
+    private View statusRow;
+    private TextView status;
     private boolean busy;
 
     @Nullable
@@ -56,7 +58,53 @@ public class ChatFragment extends Fragment {
         send.setOnClickListener(x -> send());
         v.findViewById(R.id.btn_handoff).setOnClickListener(x -> handoff());
         v.findViewById(R.id.btn_new).setOnClickListener(x -> confirmNew());
+        statusRow = v.findViewById(R.id.status_row);
+        status = v.findViewById(R.id.status);
+        v.findViewById(R.id.btn_retry).setOnClickListener(x -> Queue.kick(requireContext().getApplicationContext(), 0));
+        v.findViewById(R.id.btn_cancel).setOnClickListener(x -> {
+            Db db = Db.get(requireContext());
+            db.deleteJobs("chat");
+            db.deleteTrailingUserMsgs();
+            reload();
+            updateStatus();
+        });
         reload();
+        updateStatus();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        Queue.setVisible(true);
+        Queue.setUi(() -> {
+            if (isAdded()) {
+                reload();
+                updateStatus();
+            }
+        });
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        Queue.setVisible(false);
+        Queue.setUi(null);
+    }
+
+    private void updateStatus() {
+        Db.Job chat = null;
+        for (Db.Job j : Db.get(requireContext()).jobs()) {
+            if ("chat".equals(j.kind)) {
+                chat = j;
+                break;
+            }
+        }
+        if (chat == null) {
+            statusRow.setVisibility(View.GONE);
+            return;
+        }
+        statusRow.setVisibility(View.VISIBLE);
+        status.setText("Waiting for a free slot (tried " + (chat.attempts + 1) + " times). I will keep trying and notify you.");
     }
 
     private void reload() {
@@ -87,11 +135,19 @@ public class ChatFragment extends Fragment {
         setBusy(true);
         Bg.run(() -> {
             Assistant.Turn t = Assistant.respond(app);
+            boolean queued = false;
+            if (t.error != null && t.retry) {
+                if (Db.get(app).jobCount("chat") == 0) Db.get(app).addJob("chat", "");
+                Queue.kick(app, Math.max(60000L, t.retryMs));
+                queued = true;
+            }
+            boolean wait = queued;
             Bg.main(() -> {
                 if (!isAdded()) return;
                 setBusy(false);
                 reload();
-                if (t.error != null) {
+                updateStatus();
+                if (t.error != null && !wait) {
                     Toast.makeText(app, t.error, Toast.LENGTH_LONG).show();
                 } else if (t.proposal != null) {
                     offer(t.proposal);
