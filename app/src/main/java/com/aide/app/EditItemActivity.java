@@ -30,6 +30,7 @@ import java.util.TimeZone;
 public class EditItemActivity extends AppCompatActivity {
     private long id;
     private long eventId = -1;
+    private boolean done;
     private final Calendar when = Calendar.getInstance();
     private TextInputLayout titleLayout;
     private TextInputEditText title;
@@ -55,6 +56,7 @@ public class EditItemActivity extends AppCompatActivity {
         i.putExtra("kind", it.kind);
         i.putExtra("start", it.start);
         i.putExtra("offsets", it.offsets);
+        i.putExtra("done", it.done);
         return i;
     }
 
@@ -77,6 +79,7 @@ public class EditItemActivity extends AppCompatActivity {
         Intent in = getIntent();
         id = in.getLongExtra("id", 0);
         eventId = in.getLongExtra("event_id", -1);
+        done = in.getBooleanExtra("done", false);
         long start = in.getLongExtra("start", 0);
         if (start == 0) {
             when.add(Calendar.DAY_OF_MONTH, 1);
@@ -94,8 +97,7 @@ public class EditItemActivity extends AppCompatActivity {
         String kind = in.getStringExtra("kind");
         int chip = R.id.chip_task;
         if ("viva".equals(kind)) chip = R.id.chip_viva;
-        else if ("subscription".equals(kind)) chip = R.id.chip_sub;
-        else if ("other".equals(kind)) chip = R.id.chip_other;
+        else if ("other".equals(kind) || "subscription".equals(kind)) chip = R.id.chip_other;
         kindGroup.check(chip);
 
         String offs = in.getStringExtra("offsets");
@@ -167,7 +169,6 @@ public class EditItemActivity extends AppCompatActivity {
     private String kindKey() {
         int c = kindGroup.getCheckedChipId();
         if (c == R.id.chip_viva) return "viva";
-        if (c == R.id.chip_sub) return "subscription";
         if (c == R.id.chip_other) return "other";
         return "task";
     }
@@ -202,6 +203,7 @@ public class EditItemActivity extends AppCompatActivity {
         it.start = when.getTimeInMillis();
         it.offsets = offsetsCsv();
         it.eventId = eventId;
+        it.done = done;
         String err = Items.save(this, it);
         if (err != null) {
             Toast.makeText(this, err, Toast.LENGTH_LONG).show();

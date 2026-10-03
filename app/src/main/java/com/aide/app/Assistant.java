@@ -28,7 +28,7 @@ final class Assistant {
             "\nTo remember a lasting fact or preference about the user, add a line at the very end of your reply: "
                     + "[[note: the fact]]. Never store passwords, codes or card numbers.\n"
                     + "When the user wants something scheduled, add a line at the very end: "
-                    + "[[event: {\"title\":\"...\",\"kind\":\"viva|task|subscription|other\",\"date\":\"yyyy-MM-dd\","
+                    + "[[event: {\"title\":\"...\",\"kind\":\"viva|task|other\",\"date\":\"yyyy-MM-dd\","
                     + "\"time\":\"HH:mm\",\"remind\":[2880]}]] where remind lists minutes before the event, "
                     + "and tell the user it is ready to review. These bracketed lines are hidden from the user.";
 
@@ -43,12 +43,17 @@ final class Assistant {
 
     static final class Turn {
         String error;
+        String reply;
         Db.Item proposal;
+        boolean retry;
+        long retryMs;
     }
 
     static final class Parsed {
         Db.Item item;
         String error;
+        boolean retry;
+        long retryMs;
     }
 
     private Assistant() {}
@@ -139,34 +144,42 @@ final class Assistant {
 
     static Turn respond(Context c) {
         Turn t = new Turn();
-        try {
-            Db db = Db.get(c);
-            maybeSummarize(c);
-            Gemini.Result r = Gemini.call(c, system(c), contents(db.activeMsgs()), false);
-            if (!r.ok()) {
-                t.error = r.error;
-                return t;
-            }
-            String raw = r.text;
-
-            Matcher nm = NOTE.matcher(raw);
-            int saved = 0;
-            while (nm.find() && saved < 3) {
-                String n = nm.group(1).trim();
-                if (!n.isEmpty() && !SECRET.matcher(n).find()) {
-                    db.addNoteIfNew(n);
-                    saved++;
+        synchronized (Queue.LOCK) {
+            try {
+                Db db = Db.get(c);
+                List<Db.Msg> active = db.activeMsgs();
+                if (!active.isEmpty() && "model".equals(active.get(active.size() - 1).role)) return t;
+                maybeSummarize(c);
+                Gemini.Result r = Gemini.call(c, system(c), contents(db.activeMsgs()), false);
+                if (!r.ok()) {
+                    t.error = r.error;
+                    t.retry = r.retryable();
+                    t.retryMs = r.retryMs;
+                    return t;
                 }
+                String raw = r.text;
+
+                Matcher nm = NOTE.matcher(raw);
+                int saved = 0;
+                while (nm.find() && saved < 3) {
+                    String n = nm.group(1).trim();
+                    if (!n.isEmpty() && !SECRET.matcher(n).find()) {
+                        db.addNoteIfNew(n);
+                        saved++;
+                    }
+                }
+
+                Matcher em = EVENT.matcher(raw);
+                if (em.find()) t.proposal = itemFromJson(new JSONObject(em.group(1)));
+
+                String clean = EVENT.matcher(NOTE.matcher(raw).replaceAll("")).replaceAll("").trim();
+                if (clean.isEmpty()) clean = "Done.";
+                db.addMsg("model", clean);
+                db.deleteJobs("chat");
+                t.reply = clean;
+            } catch (Exception e) {
+                t.error = "Something went wrong. Please try again.";
             }
-
-            Matcher em = EVENT.matcher(raw);
-            if (em.find()) t.proposal = itemFromJson(new JSONObject(em.group(1)));
-
-            String clean = EVENT.matcher(NOTE.matcher(raw).replaceAll("")).replaceAll("").trim();
-            if (clean.isEmpty()) clean = "Done.";
-            db.addMsg("model", clean);
-        } catch (Exception e) {
-            t.error = "Something went wrong. Please try again.";
         }
         return t;
     }
@@ -199,12 +212,14 @@ final class Assistant {
             String now = new SimpleDateFormat("EEEE, yyyy-MM-dd HH:mm", Locale.US).format(new Date());
             String sys = "Turn the user's sentence into one calendar item. Now: " + now + " ("
                     + TimeZone.getDefault().getID() + "). Reply with JSON only: "
-                    + "{\"title\":string,\"kind\":\"viva|task|subscription|other\",\"date\":\"yyyy-MM-dd\","
+                    + "{\"title\":string,\"kind\":\"viva|task|other\",\"date\":\"yyyy-MM-dd\","
                     + "\"time\":\"HH:mm\" or \"\",\"remind\":[minutes before the event]}. "
                     + "Resolve relative dates from now. If the user gives no reminder, use [1440]. Keep the title short.";
             Gemini.Result r = Gemini.call(c, sys, single(text), true);
             if (!r.ok()) {
                 p.error = r.error;
+                p.retry = r.retryable();
+                p.retryMs = r.retryMs;
                 return p;
             }
             String s = r.text;
@@ -255,7 +270,7 @@ final class Assistant {
 
     private static String normKind(String k) {
         String s = k == null ? "" : k.toLowerCase(Locale.US).trim();
-        if (s.equals("viva") || s.equals("task") || s.equals("subscription")) return s;
+        if (s.equals("viva") || s.equals("task")) return s;
         return "other";
     }
 }

@@ -19,6 +19,7 @@ import java.util.List;
 public class SettingsActivity extends AppCompatActivity {
     private TextInputEditText key;
     private TextInputEditText model;
+    private TextInputEditText fallback;
     private MaterialAutoCompleteTextView calendar;
     private List<CalendarHelper.Cal> cals = new ArrayList<>();
     private int selected = -1;
@@ -37,10 +38,12 @@ public class SettingsActivity extends AppCompatActivity {
         tb.setNavigationOnClickListener(v -> finish());
         key = findViewById(R.id.key);
         model = findViewById(R.id.model);
+        fallback = findViewById(R.id.fallback);
         calendar = findViewById(R.id.calendar);
 
         key.setText(Prefs.apiKey(this));
         model.setText(Prefs.model(this));
+        fallback.setText(Prefs.fallbackModel(this));
         calendar.setOnItemClickListener((p, v, pos, rowId) -> selected = pos);
         findViewById(R.id.btn_save).setOnClickListener(v -> save());
 
@@ -75,6 +78,7 @@ public class SettingsActivity extends AppCompatActivity {
             return;
         }
         Prefs.setModel(this, m);
+        Prefs.setFallbackModel(this, fallback.getText() == null ? "" : fallback.getText().toString().trim());
         if (selected >= 0 && selected < cals.size()) Prefs.setCalendarId(this, cals.get(selected).id);
         Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
         finish();
