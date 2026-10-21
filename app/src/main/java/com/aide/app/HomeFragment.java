@@ -1,9 +1,12 @@
 package com.aide.app;
 
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Paint;
 import android.os.Bundle;
+import android.speech.RecognizerIntent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -13,6 +16,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -21,6 +26,7 @@ import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
@@ -41,6 +47,16 @@ public class HomeFragment extends Fragment {
     private LinearLayout doneList;
     private TextInputLayout quickLayout;
     private TextInputEditText quick;
+
+    private final ActivityResultLauncher<Intent> speech = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(), r -> {
+                Intent data = r.getData();
+                if (r.getResultCode() != Activity.RESULT_OK || data == null) return;
+                ArrayList<String> heard = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+                if (heard == null || heard.isEmpty() || !isAdded() || getView() == null) return;
+                quick.setText(heard.get(0));
+                submit();
+            });
 
     @Nullable
     @Override
@@ -69,6 +85,7 @@ public class HomeFragment extends Fragment {
         v.findViewById(R.id.fab).setOnClickListener(x ->
                 startActivity(new Intent(requireContext(), EditItemActivity.class)));
         quickLayout.setEndIconOnClickListener(x -> submit());
+        quickLayout.setStartIconOnClickListener(x -> startVoice());
         quick.setOnEditorActionListener((tv, action, e) -> {
             if (action == EditorInfo.IME_ACTION_SEND) {
                 submit();
@@ -82,6 +99,23 @@ public class HomeFragment extends Fragment {
     public void onResume() {
         super.onResume();
         refresh();
+        Intent in = requireActivity().getIntent();
+        if (in != null && in.hasExtra("voice")) {
+            in.removeExtra("voice");
+            startVoice();
+        }
+    }
+
+    void startVoice() {
+        Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        i.putExtra(RecognizerIntent.EXTRA_PROMPT, "Say a task or schedule");
+        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        try {
+            speech.launch(i);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(requireContext(), "No speech service found on this phone.", Toast.LENGTH_LONG).show();
+        }
     }
 
     private View row(LayoutInflater inf, ViewGroup parent, Context c, Db.Item it, boolean done) {

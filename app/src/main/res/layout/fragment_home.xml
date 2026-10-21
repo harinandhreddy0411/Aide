@@ -94,6 +94,8 @@
                 android:layout_marginTop="20dp"
                 android:hint="Add with a sentence"
                 app:endIconContentDescription="Add"
+                app:startIconContentDescription="Speak"
+                app:startIconDrawable="@drawable/ic_mic"
                 app:endIconDrawable="@drawable/ic_send"
                 app:endIconMode="custom">
 
@@ -111,7 +113,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="4dp"
                 android:layout_marginTop="6dp"
-                android:text="Try: viva on 12 Oct, remind me 2 days before"
+                android:text="Type or tap the mic and say: viva on 12 Oct, remind me 2 days before"
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
 

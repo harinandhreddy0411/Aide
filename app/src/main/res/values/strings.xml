@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Aide</string>
+    <string name="shortcut_speak">Speak a note</string>
 </resources>
