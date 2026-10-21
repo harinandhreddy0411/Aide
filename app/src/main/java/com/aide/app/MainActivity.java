@@ -58,6 +58,7 @@ public class MainActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         if ("chat".equals(intent.getStringExtra("tab"))) nav.setSelectedItemId(R.id.nav_chat);
+        if (intent.hasExtra("voice")) nav.setSelectedItemId(R.id.nav_home);
     }
 
     private void askPermissions() {

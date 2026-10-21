@@ -39,6 +39,8 @@ public class NextItemWidget extends AppWidgetProvider {
         int flags = PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT;
         v.setOnClickPendingIntent(R.id.w_root, PendingIntent.getActivity(c, 10, new Intent(c, MainActivity.class), flags));
         v.setOnClickPendingIntent(R.id.w_add, PendingIntent.getActivity(c, 11, new Intent(c, EditItemActivity.class), flags));
+        v.setOnClickPendingIntent(R.id.w_speak, PendingIntent.getActivity(c, 12,
+                new Intent(c, MainActivity.class).putExtra("voice", true), flags));
         return v;
     }
 }
