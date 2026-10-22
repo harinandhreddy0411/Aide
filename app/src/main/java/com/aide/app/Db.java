@@ -8,8 +8,11 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 final class Db extends SQLiteOpenHelper {
 
@@ -43,6 +46,19 @@ final class Db extends SQLiteOpenHelper {
         }
     }
 
+    static final class Routine {
+        long id;
+        String title;
+        int startMin;
+        int endMin;
+        int days = 127;
+        int nudgeMin;
+
+        boolean runsOn(Calendar c) {
+            return (days & (1 << (c.get(Calendar.DAY_OF_WEEK) - 1))) != 0;
+        }
+    }
+
     static final class Job {
         long id;
         String kind;
@@ -65,6 +81,11 @@ final class Db extends SQLiteOpenHelper {
     private static final String JOBS_SQL = "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, "
             + "payload TEXT, attempts INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL)";
 
+    private static final String ROUTINES_SQL = "CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            + "start_min INTEGER NOT NULL, end_min INTEGER NOT NULL, days INTEGER NOT NULL DEFAULT 127, nudge_min INTEGER NOT NULL DEFAULT 0)";
+    private static final String LOG_SQL = "CREATE TABLE routine_log (routine_id INTEGER NOT NULL, day TEXT NOT NULL, "
+            + "status INTEGER NOT NULL, PRIMARY KEY (routine_id, day))";
+
     private static Db instance;
 
     static synchronized Db get(Context c) {
@@ -73,7 +94,7 @@ final class Db extends SQLiteOpenHelper {
     }
 
     private Db(Context c) {
-        super(c, "aide.db", null, 2);
+        super(c, "aide.db", null, 3);
     }
 
     @Override
@@ -81,6 +102,8 @@ final class Db extends SQLiteOpenHelper {
         d.execSQL("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, kind TEXT NOT NULL, "
                 + "start_ms INTEGER NOT NULL, offsets TEXT, event_id INTEGER DEFAULT -1, cal_id INTEGER DEFAULT -1, done INTEGER NOT NULL DEFAULT 0)");
         d.execSQL(JOBS_SQL);
+        d.execSQL(ROUTINES_SQL);
+        d.execSQL(LOG_SQL);
         d.execSQL("CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, updated INTEGER NOT NULL)");
         d.execSQL("CREATE TABLE msgs (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, body TEXT NOT NULL, "
                 + "ts INTEGER NOT NULL, summarized INTEGER NOT NULL DEFAULT 0)");
@@ -91,6 +114,10 @@ final class Db extends SQLiteOpenHelper {
         if (oldVersion < 2) {
             d.execSQL("ALTER TABLE items ADD COLUMN done INTEGER NOT NULL DEFAULT 0");
             d.execSQL(JOBS_SQL);
+        }
+        if (oldVersion < 3) {
+            d.execSQL(ROUTINES_SQL);
+            d.execSQL(LOG_SQL);
         }
     }
 
@@ -126,6 +153,10 @@ final class Db extends SQLiteOpenHelper {
 
     synchronized void deleteItem(long id) {
         getWritableDatabase().delete("items", "id=?", new String[]{String.valueOf(id)});
+    }
+
+    synchronized void purgeDone() {
+        getWritableDatabase().delete("items", "done = 1", null);
     }
 
     synchronized List<Item> upcoming(long from) {
@@ -236,6 +267,86 @@ final class Db extends SQLiteOpenHelper {
 
     synchronized List<Item> history() {
         return items("done = 1", "start_ms DESC", "10");
+    }
+
+    private static Routine readRoutine(Cursor c) {
+        Routine r = new Routine();
+        r.id = c.getLong(c.getColumnIndexOrThrow("id"));
+        r.title = c.getString(c.getColumnIndexOrThrow("title"));
+        r.startMin = c.getInt(c.getColumnIndexOrThrow("start_min"));
+        r.endMin = c.getInt(c.getColumnIndexOrThrow("end_min"));
+        r.days = c.getInt(c.getColumnIndexOrThrow("days"));
+        r.nudgeMin = c.getInt(c.getColumnIndexOrThrow("nudge_min"));
+        return r;
+    }
+
+    synchronized long saveRoutine(Routine r) {
+        ContentValues v = new ContentValues();
+        v.put("title", r.title);
+        v.put("start_min", r.startMin);
+        v.put("end_min", r.endMin);
+        v.put("days", r.days);
+        v.put("nudge_min", r.nudgeMin);
+        SQLiteDatabase d = getWritableDatabase();
+        if (r.id > 0) {
+            d.update("routines", v, "id=?", new String[]{String.valueOf(r.id)});
+            return r.id;
+        }
+        return d.insert("routines", null, v);
+    }
+
+    synchronized void deleteRoutine(long id) {
+        SQLiteDatabase d = getWritableDatabase();
+        d.delete("routines", "id=?", new String[]{String.valueOf(id)});
+        d.delete("routine_log", "routine_id=?", new String[]{String.valueOf(id)});
+    }
+
+    synchronized List<Routine> routines() {
+        List<Routine> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().query("routines", null, null, null, null, null, "start_min ASC, id ASC")) {
+            while (c.moveToNext()) out.add(readRoutine(c));
+        }
+        return out;
+    }
+
+    synchronized Routine routine(long id) {
+        try (Cursor c = getReadableDatabase().query("routines", null, "id=?", new String[]{String.valueOf(id)},
+                null, null, null)) {
+            return c.moveToFirst() ? readRoutine(c) : null;
+        }
+    }
+
+    synchronized int status(long routineId, String day) {
+        try (Cursor c = getReadableDatabase().query("routine_log", new String[]{"status"}, "routine_id=? AND day=?",
+                new String[]{String.valueOf(routineId), day}, null, null, null)) {
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        }
+    }
+
+    synchronized void setStatus(long routineId, String day, int status) {
+        SQLiteDatabase d = getWritableDatabase();
+        if (status == 0) {
+            d.delete("routine_log", "routine_id=? AND day=?", new String[]{String.valueOf(routineId), day});
+            return;
+        }
+        ContentValues v = new ContentValues();
+        v.put("routine_id", routineId);
+        v.put("day", day);
+        v.put("status", status);
+        d.insertWithOnConflict("routine_log", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    synchronized Set<String> doneDays(long routineId) {
+        Set<String> out = new HashSet<>();
+        try (Cursor c = getReadableDatabase().query("routine_log", new String[]{"day"}, "routine_id=? AND status=1",
+                new String[]{String.valueOf(routineId)}, null, null, null)) {
+            while (c.moveToNext()) out.add(c.getString(0));
+        }
+        return out;
+    }
+
+    synchronized void trimLog(String beforeDay) {
+        getWritableDatabase().delete("routine_log", "day < ?", new String[]{beforeDay});
     }
 
     synchronized long addJob(String kind, String payload) {
