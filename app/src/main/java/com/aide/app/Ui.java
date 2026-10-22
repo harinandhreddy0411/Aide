@@ -23,6 +23,32 @@ final class Ui {
         });
     }
 
+    static String clock(int min) {
+        int h = min / 60;
+        int h12 = h % 12 == 0 ? 12 : h % 12;
+        return String.format(Locale.getDefault(), "%d:%02d %s", h12, min % 60, h < 12 ? "AM" : "PM");
+    }
+
+    static String daysLabel(int mask) {
+        if (mask == 127) return "Every day";
+        String[] names = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        int[] order = {1, 2, 3, 4, 5, 6, 0};
+        StringBuilder sb = new StringBuilder();
+        for (int i : order) {
+            if ((mask & (1 << i)) != 0) {
+                if (sb.length() > 0) sb.append(", ");
+                sb.append(names[i]);
+            }
+        }
+        return sb.toString();
+    }
+
+    static String duration(long ms) {
+        long m = Math.max(1, ms / 60000L);
+        if (m < 60) return m + " min";
+        return (m / 60) + " h " + (m % 60) + " min";
+    }
+
     static String kindLabel(String k) {
         if ("viva".equals(k)) return "Viva";
         if ("task".equals(k)) return "Task";

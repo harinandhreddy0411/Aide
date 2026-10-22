@@ -1,6 +1,9 @@
-Aide v1 (complete Android Studio project)
+Aide v3
 
-Option A: Android Studio > Open > select this folder > wait for sync > Run on your phone.
-Option B (no Android Studio): push this folder to a GitHub repo. The Actions tab builds the APK;
-download "aide-debug-apk" from the finished run, unzip it, install app-debug.apk on your phone.
+Open this folder in Android Studio (the one that contains settings.gradle) and run on your phone,
+or push it to GitHub and download the APK from the Actions run.
+
 First launch: three-dot menu > Settings > paste Gemini API key, pick calendar, Save.
+
+Home: next item, quick add (type or mic), plan my day, daily practice, coming up.
+Settings > Daily rhythm: morning brief time, long-use nudges (needs Usage access).

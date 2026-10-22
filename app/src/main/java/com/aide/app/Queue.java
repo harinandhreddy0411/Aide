@@ -46,7 +46,7 @@ final class Queue {
                 giveUp(c, db, j);
                 continue;
             }
-            int out = "chat".equals(j.kind) ? chat(c, db) : quick(c, j);
+            int out = "chat".equals(j.kind) ? chat(c, db) : "plan".equals(j.kind) ? plan(c, j) : quick(c, j);
             if (out == DONE) {
                 db.deleteJob(j.id);
             } else {
@@ -94,10 +94,31 @@ final class Queue {
         return RETRY;
     }
 
+    private static int plan(Context c, Db.Job j) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            Gemini.Result r = Assistant.plan(c, j.payload);
+            if (r.ok()) {
+                Prefs.setPlan(c, Agenda.dayKey(System.currentTimeMillis()), r.text);
+                Notify.info(c, "Your day plan is ready", r.text, 4000);
+                return DONE;
+            }
+            if (!r.retryable()) {
+                Notify.info(c, "Could not plan your day", String.valueOf(r.error), 4000);
+                return DONE;
+            }
+            if (attempt == 0 && r.retryMs > 0 && r.retryMs <= 65000 && pause(r.retryMs + 1000)) continue;
+            return RETRY;
+        }
+        return RETRY;
+    }
+
     private static void giveUp(Context c, Db db, Db.Job j) {
         if ("chat".equals(j.kind)) {
             db.addMsg("model", "I could not get a reply because of rate limits. Please send it again later.");
             db.deleteJobs("chat");
+        } else if ("plan".equals(j.kind)) {
+            Notify.info(c, "Could not plan your day", "Rate limits kept blocking it. Try again later.", 4000);
+            db.deleteJob(j.id);
         } else {
             Notify.info(c, "Could not add an item", "Rate limits kept blocking it. Try again later.",
                     3000 + (int) (j.id % 1000));

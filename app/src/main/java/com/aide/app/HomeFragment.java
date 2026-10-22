@@ -4,13 +4,14 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Paint;
 import android.os.Bundle;
+import android.util.TypedValue;
 import android.speech.RecognizerIntent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -22,6 +23,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.snackbar.Snackbar;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 
@@ -39,12 +42,15 @@ public class HomeFragment extends Fragment {
     private TextView nextTitle;
     private TextView nextWhen;
     private TextView laterLabel;
-    private TextView doneLabel;
     private View nextCard;
     private View nextDone;
     private View progress;
     private LinearLayout list;
-    private LinearLayout doneList;
+    private LinearLayout practiceList;
+    private TextView practiceEmpty;
+    private View planCard;
+    private TextView planBody;
+    private Button planBtn;
     private TextInputLayout quickLayout;
     private TextInputEditText quick;
 
@@ -73,17 +79,28 @@ public class HomeFragment extends Fragment {
         nextTitle = v.findViewById(R.id.next_title);
         nextWhen = v.findViewById(R.id.next_when);
         laterLabel = v.findViewById(R.id.later_label);
-        doneLabel = v.findViewById(R.id.done_label);
         nextCard = v.findViewById(R.id.next_card);
         nextDone = v.findViewById(R.id.next_done);
         progress = v.findViewById(R.id.progress);
         list = v.findViewById(R.id.list);
-        doneList = v.findViewById(R.id.done_list);
+        practiceList = v.findViewById(R.id.practice_list);
+        practiceEmpty = v.findViewById(R.id.practice_empty);
+        planCard = v.findViewById(R.id.plan_card);
+        planBody = v.findViewById(R.id.plan_body);
+        planBtn = v.findViewById(R.id.btn_plan);
         quickLayout = v.findViewById(R.id.quick_layout);
         quick = v.findViewById(R.id.quick);
 
         v.findViewById(R.id.fab).setOnClickListener(x ->
                 startActivity(new Intent(requireContext(), EditItemActivity.class)));
+        v.findViewById(R.id.practice_add).setOnClickListener(x ->
+                startActivity(new Intent(requireContext(), EditRoutineActivity.class)));
+        planBtn.setOnClickListener(x -> planDialog());
+        v.findViewById(R.id.plan_replan).setOnClickListener(x -> planDialog());
+        v.findViewById(R.id.plan_dismiss).setOnClickListener(x -> {
+            Prefs.setPlan(requireContext(), "", "");
+            refresh();
+        });
         quickLayout.setEndIconOnClickListener(x -> submit());
         quickLayout.setStartIconOnClickListener(x -> startVoice());
         quick.setOnEditorActionListener((tv, action, e) -> {
@@ -99,10 +116,19 @@ public class HomeFragment extends Fragment {
     public void onResume() {
         super.onResume();
         refresh();
+        consumeIntent();
+    }
+
+    void consumeIntent() {
+        if (!isAdded()) return;
         Intent in = requireActivity().getIntent();
-        if (in != null && in.hasExtra("voice")) {
+        if (in == null) return;
+        if (in.hasExtra("voice")) {
             in.removeExtra("voice");
             startVoice();
+        } else if (in.hasExtra("plan")) {
+            in.removeExtra("plan");
+            planDialog();
         }
     }
 
@@ -118,25 +144,16 @@ public class HomeFragment extends Fragment {
         }
     }
 
-    private View row(LayoutInflater inf, ViewGroup parent, Context c, Db.Item it, boolean done) {
+    private View row(LayoutInflater inf, ViewGroup parent, Context c, Db.Item it) {
         View row = inf.inflate(R.layout.item_row, parent, false);
         Calendar cal = Calendar.getInstance();
         cal.setTimeInMillis(it.start);
         ((TextView) row.findViewById(R.id.day)).setText(String.valueOf(cal.get(Calendar.DAY_OF_MONTH)));
         ((TextView) row.findViewById(R.id.month)).setText(
                 new SimpleDateFormat("MMM", Locale.getDefault()).format(new Date(it.start)));
-        TextView title = row.findViewById(R.id.title);
-        title.setText(it.title);
-        int flags = title.getPaintFlags();
-        title.setPaintFlags(done ? flags | Paint.STRIKE_THRU_TEXT_FLAG : flags & ~Paint.STRIKE_THRU_TEXT_FLAG);
+        ((TextView) row.findViewById(R.id.title)).setText(it.title);
         ((TextView) row.findViewById(R.id.sub)).setText(Ui.subline(it));
-        CheckBox check = row.findViewById(R.id.check);
-        check.setChecked(done);
-        check.setOnClickListener(x -> {
-            String err = Items.setDone(c, it, !done);
-            if (err != null) Toast.makeText(c, err, Toast.LENGTH_LONG).show();
-            refresh();
-        });
+        ((CheckBox) row.findViewById(R.id.check)).setOnClickListener(x -> complete(it));
         row.setOnClickListener(x -> startActivity(EditItemActivity.intentFor(c, it)));
         return row;
     }
@@ -150,11 +167,10 @@ public class HomeFragment extends Fragment {
         date.setText(new SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(now.getTime()));
 
         Db db = Db.get(c);
+        db.purgeDone();
         LayoutInflater inf = LayoutInflater.from(c);
-        List<Db.Item> hist = db.history();
-        doneList.removeAllViews();
-        doneLabel.setVisibility(hist.isEmpty() ? View.GONE : View.VISIBLE);
-        for (Db.Item it : hist) doneList.addView(row(inf, doneList, c, it, true));
+        refreshPractice(c, inf, db);
+        refreshPlan(c);
 
         List<Db.Item> items = db.open();
         list.removeAllViews();
@@ -175,18 +191,139 @@ public class HomeFragment extends Fragment {
         nextWhen.setText(Ui.timeText(first.start));
         nextCard.setOnClickListener(x -> startActivity(EditItemActivity.intentFor(c, first)));
         nextDone.setVisibility(View.VISIBLE);
-        nextDone.setOnClickListener(x -> {
-            Items.setDone(c, first, true);
-            refresh();
-        });
+        nextDone.setOnClickListener(x -> complete(first));
 
         laterLabel.setVisibility(items.size() > 1 ? View.VISIBLE : View.GONE);
-        for (int i = 1; i < items.size(); i++) list.addView(row(inf, list, c, items.get(i), false));
+        for (int i = 1; i < items.size(); i++) list.addView(row(inf, list, c, items.get(i)));
+    }
+
+    private void refreshPractice(Context c, LayoutInflater inf, Db db) {
+        practiceList.removeAllViews();
+        List<Db.Routine> all = db.routines();
+        practiceEmpty.setVisibility(all.isEmpty() ? View.VISIBLE : View.GONE);
+        Calendar today = Calendar.getInstance();
+        String key = Agenda.dayKey(today.getTimeInMillis());
+        for (Db.Routine r : all) {
+            if (r.runsOn(today)) practiceList.addView(routineRow(inf, c, db, r, true, key));
+        }
+        for (Db.Routine r : all) {
+            if (!r.runsOn(today)) practiceList.addView(routineRow(inf, c, db, r, false, key));
+        }
+    }
+
+    private View routineRow(LayoutInflater inf, Context c, Db db, Db.Routine r, boolean today, String key) {
+        View row = inf.inflate(R.layout.item_row, practiceList, false);
+        int status = today ? db.status(r.id, key) : 0;
+        String clock = Ui.clock(r.startMin);
+        int space = clock.lastIndexOf(' ');
+        TextView time = row.findViewById(R.id.day);
+        time.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        time.setText(clock.substring(0, space));
+        ((TextView) row.findViewById(R.id.month)).setText(clock.substring(space + 1));
+        ((TextView) row.findViewById(R.id.title)).setText(r.title);
+
+        StringBuilder sub = new StringBuilder();
+        if (!today) {
+            sub.append("Not today, ").append(Ui.daysLabel(r.days));
+        } else if (status == 1) {
+            sub.append("Done today");
+        } else if (status == 2) {
+            sub.append("Skipped today");
+        } else {
+            sub.append(Ui.clock(r.startMin)).append(" to ").append(Ui.clock(r.endMin));
+        }
+        int streak = Agenda.streak(db, r);
+        if (streak > 0) sub.append(", ").append(streak).append(" day streak");
+        ((TextView) row.findViewById(R.id.sub)).setText(sub);
+
+        CheckBox check = row.findViewById(R.id.check);
+        if (!today) {
+            check.setVisibility(View.INVISIBLE);
+        } else {
+            check.setChecked(status == 1);
+            check.setOnClickListener(x -> {
+                db.setStatus(r.id, key, check.isChecked() ? 1 : 0);
+                Notify.cancel(c, Agenda.notifId(r.id));
+                refresh();
+            });
+        }
+        row.setOnClickListener(x -> startActivity(EditRoutineActivity.intentFor(c, r)));
+        return row;
+    }
+
+    private void refreshPlan(Context c) {
+        String text = Prefs.planText(c);
+        boolean show = !text.isEmpty() && Agenda.dayKey(System.currentTimeMillis()).equals(Prefs.planDay(c));
+        planCard.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) planBody.setText(text);
+    }
+
+    private void planDialog() {
+        Context c = requireContext();
+        if (Db.get(c).jobCount("plan") > 0) {
+            Toast.makeText(c, "Your plan is already waiting for the AI limit. I will notify you.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        View view = getLayoutInflater().inflate(R.layout.dialog_input, null);
+        ((TextInputLayout) view.findViewById(R.id.input_layout)).setHint("Anything to fit in today? (optional)");
+        TextInputEditText in = view.findViewById(R.id.input);
+        new MaterialAlertDialogBuilder(c)
+                .setTitle("Plan my day")
+                .setView(view)
+                .setPositiveButton("Plan", (d, w) -> runPlan(in.getText() == null ? "" : in.getText().toString().trim()))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void runPlan(String extra) {
+        setBusy(true);
+        Context app = requireContext().getApplicationContext();
+        Bg.run(() -> {
+            Gemini.Result r = Assistant.plan(app, extra);
+            boolean queued = false;
+            if (r.ok()) {
+                Prefs.setPlan(app, Agenda.dayKey(System.currentTimeMillis()), r.text);
+            } else if (r.retryable()) {
+                Db.get(app).addJob("plan", extra);
+                Queue.kick(app, Math.max(60000L, r.retryMs));
+                queued = true;
+            }
+            boolean wait = queued;
+            Bg.main(() -> {
+                if (!isAdded()) return;
+                setBusy(false);
+                if (r.ok()) {
+                    refresh();
+                    return;
+                }
+                Toast.makeText(app, wait ? "Rate limited. I will keep trying and notify you when the plan is ready." : r.error,
+                        Toast.LENGTH_LONG).show();
+            });
+        });
+    }
+
+    private void complete(Db.Item it) {
+        Context c = requireContext();
+        Items.remove(c, it);
+        refresh();
+        Snackbar.make(requireView(), "Done: " + it.title, 6000)
+                .setAction("Undo", x -> {
+                    Db.Item back = new Db.Item();
+                    back.title = it.title;
+                    back.kind = it.kind;
+                    back.start = it.start;
+                    back.offsets = it.offsets;
+                    String err = Items.save(c, back);
+                    if (err != null) Toast.makeText(c, err, Toast.LENGTH_LONG).show();
+                    refresh();
+                })
+                .show();
     }
 
     private void setBusy(boolean busy) {
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);
         quickLayout.setEnabled(!busy);
+        planBtn.setEnabled(!busy);
     }
 
     private void submit() {

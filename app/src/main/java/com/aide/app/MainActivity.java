@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+import androidx.lifecycle.Lifecycle;
 
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
@@ -51,6 +52,7 @@ public class MainActivity extends AppCompatActivity {
             show(R.id.nav_home);
         }
         askPermissions();
+        Usage.apply(this);
     }
 
     @Override
@@ -58,7 +60,18 @@ public class MainActivity extends AppCompatActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         if ("chat".equals(intent.getStringExtra("tab"))) nav.setSelectedItemId(R.id.nav_chat);
-        if (intent.hasExtra("voice")) nav.setSelectedItemId(R.id.nav_home);
+        if (intent.hasExtra("voice") || intent.hasExtra("plan")) nav.setSelectedItemId(R.id.nav_home);
+        Fragment f = getSupportFragmentManager().findFragmentById(R.id.container);
+        if (f instanceof HomeFragment && getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
+            ((HomeFragment) f).consumeIntent();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        android.content.Context app = getApplicationContext();
+        Bg.run(() -> Agenda.tick(app));
     }
 
     private void askPermissions() {

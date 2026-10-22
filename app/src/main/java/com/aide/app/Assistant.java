@@ -8,6 +8,7 @@ import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -200,6 +201,71 @@ final class Assistant {
                 sb.append("user".equals(m.role) ? "User: " : "Assistant: ").append(m.body).append('\n');
             }
             return Gemini.call(c, HANDOFF_PROMPT, single(sb.toString()), false);
+        } catch (Exception e) {
+            none.error = "Something went wrong. Please try again.";
+            return none;
+        }
+    }
+
+    private static final String PLAN_PROMPT =
+            "You plan the user's day on their phone. Build a realistic time-blocked plan from now until bedtime "
+                    + "(assume 23:00 unless the notes say otherwise). Keep every fixed item and practice slot at its "
+                    + "stated time. Fit the user's extra requests into free time, add short breaks and meals, and say "
+                    + "plainly if something does not fit. Plain text only: no markdown, no asterisks, no headings. "
+                    + "One line per block like '6:00 PM - 7:00 PM  Guitar practice'. At most 14 lines, then one line "
+                    + "of advice.";
+
+    static Gemini.Result plan(Context c, String extra) {
+        Gemini.Result none = new Gemini.Result();
+        try {
+            Db db = Db.get(c);
+            long now = System.currentTimeMillis();
+            Calendar day = Calendar.getInstance();
+            day.set(Calendar.HOUR_OF_DAY, 0);
+            day.set(Calendar.MINUTE, 0);
+            day.set(Calendar.SECOND, 0);
+            day.set(Calendar.MILLISECOND, 0);
+            long dayStart = day.getTimeInMillis();
+            Calendar next = (Calendar) day.clone();
+            next.add(Calendar.DAY_OF_MONTH, 1);
+            long dayEnd = next.getTimeInMillis();
+            String key = Agenda.dayKey(dayStart);
+            SimpleDateFormat tf = new SimpleDateFormat("h:mm a", Locale.US);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Now: ").append(new SimpleDateFormat("EEEE, yyyy-MM-dd h:mm a", Locale.US).format(new Date(now)))
+                    .append(" (").append(TimeZone.getDefault().getID()).append(").\n");
+
+            StringBuilder fixed = new StringBuilder();
+            for (Db.Item it : db.open()) {
+                if (it.start >= dayEnd) continue;
+                fixed.append("- ").append(it.kind).append(": ").append(it.title).append(", ")
+                        .append(it.start < dayStart ? "overdue" : tf.format(new Date(it.start))).append('\n');
+            }
+            sb.append("\nFixed items:\n").append(fixed.length() > 0 ? fixed.toString() : "none\n");
+
+            StringBuilder practice = new StringBuilder();
+            for (Db.Routine r : db.routines()) {
+                if (!r.runsOn(day)) continue;
+                practice.append("- ").append(r.title).append(", ").append(Ui.clock(r.startMin)).append(" to ")
+                        .append(Ui.clock(r.endMin));
+                if (db.status(r.id, key) == 1) practice.append(" (already done)");
+                practice.append('\n');
+            }
+            sb.append("\nDaily practice slots today:\n").append(practice.length() > 0 ? practice.toString() : "none\n");
+
+            StringBuilder notes = new StringBuilder();
+            for (Db.Note n : db.notes()) {
+                if (n.body.startsWith("Handoff:")) continue;
+                String b = n.body.length() > 300 ? n.body.substring(0, 300) : n.body;
+                if (notes.length() + b.length() > 1500) break;
+                notes.append("- ").append(b.replace('\n', ' ')).append('\n');
+            }
+            if (notes.length() > 0) sb.append("\nWhat you know about the user:\n").append(notes);
+
+            String ask = extra == null ? "" : extra.trim();
+            sb.append("\nExtra requests for today: ").append(ask.isEmpty() ? "none" : ask).append('\n');
+            return Gemini.call(c, PLAN_PROMPT, single(sb.toString()), false);
         } catch (Exception e) {
             none.error = "Something went wrong. Please try again.";
             return none;
