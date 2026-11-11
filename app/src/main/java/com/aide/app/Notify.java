@@ -68,13 +68,12 @@ final class Notify {
         return new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
     }
 
-    static void reply(Context c, String text) {
-        Intent i = home(c).putExtra("tab", "chat");
-        post(c, UPDATES, 1, "Reply ready", text, i);
-    }
-
     static void info(Context c, String title, String body, int id) {
         post(c, UPDATES, id, title, body, home(c));
+    }
+
+    static void open(Context c, int id, String title, String body, String key, String value) {
+        post(c, UPDATES, id, title, body, home(c).putExtra(key, value));
     }
 
     static void review(Context c, Db.Item it, int id) {

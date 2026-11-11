@@ -60,16 +60,28 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
-            android:name=".ShareReceiverActivity"
-            android:excludeFromRecents="true"
-            android:exported="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/plain" />
-            </intent-filter>
-        </activity>
+            android:name=".SlotEditActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".WeekActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".SubjectsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".AttendanceActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".MealsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
 
         <receiver
             android:name=".AgendaReceiver"

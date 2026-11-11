@@ -96,6 +96,56 @@ final class CalendarHelper {
         }
     }
 
+    static long insertRange(Context c, long calId, String title, String desc, String where, long start, long end, int[] offsets) {
+        try {
+            ContentResolver cr = c.getContentResolver();
+            ContentValues v = new ContentValues();
+            v.put(CalendarContract.Events.CALENDAR_ID, calId);
+            v.put(CalendarContract.Events.TITLE, title);
+            v.put(CalendarContract.Events.DESCRIPTION, desc);
+            v.put(CalendarContract.Events.EVENT_LOCATION, where);
+            v.put(CalendarContract.Events.DTSTART, start);
+            v.put(CalendarContract.Events.DTEND, end);
+            v.put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().getID());
+            v.put(CalendarContract.Events.HAS_ALARM, offsets.length > 0 ? 1 : 0);
+            Uri u = cr.insert(CalendarContract.Events.CONTENT_URI, v);
+            if (u == null) return -1;
+            long id = ContentUris.parseId(u);
+            for (int m : offsets) {
+                ContentValues r = new ContentValues();
+                r.put(CalendarContract.Reminders.EVENT_ID, id);
+                r.put(CalendarContract.Reminders.MINUTES, m);
+                r.put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT);
+                cr.insert(CalendarContract.Reminders.CONTENT_URI, r);
+            }
+            return id;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    static long insertAllDay(Context c, long calId, String title, String desc, int year, int month, int day) {
+        try {
+            java.util.Calendar utc = java.util.Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+            utc.clear();
+            utc.set(year, month, day);
+            long start = utc.getTimeInMillis();
+            ContentValues v = new ContentValues();
+            v.put(CalendarContract.Events.CALENDAR_ID, calId);
+            v.put(CalendarContract.Events.TITLE, title);
+            v.put(CalendarContract.Events.DESCRIPTION, desc);
+            v.put(CalendarContract.Events.DTSTART, start);
+            v.put(CalendarContract.Events.DTEND, start + 86400000L);
+            v.put(CalendarContract.Events.ALL_DAY, 1);
+            v.put(CalendarContract.Events.EVENT_TIMEZONE, "UTC");
+            v.put(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_FREE);
+            Uri u = c.getContentResolver().insert(CalendarContract.Events.CONTENT_URI, v);
+            return u == null ? -1 : ContentUris.parseId(u);
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
     static void delete(Context c, long eventId) {
         try {
             c.getContentResolver().delete(ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId), null, null);

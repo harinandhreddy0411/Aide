@@ -1,6 +1,9 @@
 package com.aide.app;
 
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.TextView;
 
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -21,6 +24,16 @@ final class Ui {
             v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
             return WindowInsetsCompat.CONSUMED;
         });
+    }
+
+    static View line(ViewGroup parent, String title, String sub, View.OnClickListener click) {
+        View row = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_line, parent, false);
+        ((TextView) row.findViewById(R.id.title)).setText(title);
+        TextView s = row.findViewById(R.id.sub);
+        s.setText(sub);
+        s.setVisibility(sub == null || sub.isEmpty() ? View.GONE : View.VISIBLE);
+        row.setOnClickListener(click);
+        return row;
     }
 
     static String clock(int min) {
