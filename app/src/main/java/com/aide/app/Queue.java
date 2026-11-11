@@ -16,18 +16,8 @@ final class Queue {
     private static final long MAX_AGE = 24L * 3600000L;
     private static final int DONE = 0;
     private static final int RETRY = 1;
-    private static Runnable ui;
-    private static boolean visible;
 
     private Queue() {}
-
-    static void setUi(Runnable r) {
-        ui = r;
-    }
-
-    static void setVisible(boolean v) {
-        visible = v;
-    }
 
     static void kick(Context c, long delayMs) {
         OneTimeWorkRequest req = new OneTimeWorkRequest.Builder(QueueWorker.class)
@@ -42,11 +32,22 @@ final class Queue {
         Db db = Db.get(c);
         long now = System.currentTimeMillis();
         for (Db.Job j : db.jobs()) {
+            if (!"quick".equals(j.kind) && !"plan".equals(j.kind) && !"change".equals(j.kind)) {
+                db.deleteJob(j.id);
+                continue;
+            }
             if (now - j.created > MAX_AGE) {
                 giveUp(c, db, j);
                 continue;
             }
-            int out = "chat".equals(j.kind) ? chat(c, db) : "plan".equals(j.kind) ? plan(c, j) : quick(c, j);
+            int out;
+            if ("plan".equals(j.kind)) {
+                out = plan(c, j);
+            } else if ("change".equals(j.kind)) {
+                out = change(c, j);
+            } else {
+                out = quick(c, j);
+            }
             if (out == DONE) {
                 db.deleteJob(j.id);
             } else {
@@ -54,27 +55,7 @@ final class Queue {
                 break;
             }
         }
-        Runnable r = ui;
-        if (r != null) Bg.main(r);
         return !db.jobs().isEmpty();
-    }
-
-    private static int chat(Context c, Db db) {
-        for (int attempt = 0; attempt < 2; attempt++) {
-            Assistant.Turn t = Assistant.respond(c);
-            if (t.error == null) {
-                if (t.proposal != null) Notify.review(c, t.proposal, 2000);
-                if (t.reply != null && !visible) Notify.reply(c, t.reply);
-                return DONE;
-            }
-            if (!t.retry) {
-                db.addMsg("model", "I could not answer: " + t.error);
-                return DONE;
-            }
-            if (attempt == 0 && t.retryMs > 0 && t.retryMs <= 65000 && pause(t.retryMs + 1000)) continue;
-            return RETRY;
-        }
-        return RETRY;
     }
 
     private static int quick(Context c, Db.Job j) {
@@ -112,18 +93,39 @@ final class Queue {
         return RETRY;
     }
 
+    private static int change(Context c, Db.Job j) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            Gemini.Result r = Assistant.change(c, j.payload);
+            if (r.ok()) {
+                Changes.Parsed p = Changes.parse(c, r.text);
+                if (p.error != null) {
+                    Notify.info(c, "Could not apply your change", p.error, 4100);
+                } else {
+                    Prefs.setPendingChange(c, r.text);
+                    Notify.open(c, 4100, "Review your schedule change", "Tap to preview and apply it.", "review", "1");
+                }
+                return DONE;
+            }
+            if (!r.retryable()) {
+                Notify.info(c, "Could not apply your change", String.valueOf(r.error), 4100);
+                return DONE;
+            }
+            if (attempt == 0 && r.retryMs > 0 && r.retryMs <= 65000 && pause(r.retryMs + 1000)) continue;
+            return RETRY;
+        }
+        return RETRY;
+    }
+
     private static void giveUp(Context c, Db db, Db.Job j) {
-        if ("chat".equals(j.kind)) {
-            db.addMsg("model", "I could not get a reply because of rate limits. Please send it again later.");
-            db.deleteJobs("chat");
-        } else if ("plan".equals(j.kind)) {
+        if ("plan".equals(j.kind)) {
             Notify.info(c, "Could not plan your day", "Rate limits kept blocking it. Try again later.", 4000);
-            db.deleteJob(j.id);
+        } else if ("change".equals(j.kind)) {
+            Notify.info(c, "Could not apply your change", "Rate limits kept blocking it. Try again later.", 4100);
         } else {
             Notify.info(c, "Could not add an item", "Rate limits kept blocking it. Try again later.",
                     3000 + (int) (j.id % 1000));
-            db.deleteJob(j.id);
         }
+        db.deleteJob(j.id);
     }
 
     private static boolean pause(long ms) {

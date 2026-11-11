@@ -112,11 +112,51 @@ final class Prefs {
         sp(c).edit().putString("plan_day", day).putString("plan_text", text == null ? "" : text).apply();
     }
 
-    static String summary(Context c) {
-        return sp(c).getString("summary", "");
+    static String aboutMe(Context c) {
+        return sp(c).getString("about", "");
     }
 
-    static void setSummary(Context c, String s) {
-        sp(c).edit().putString("summary", s == null ? "" : s).apply();
+    static void setAboutMe(Context c, String s) {
+        sp(c).edit().putString("about", s == null ? "" : s.trim()).apply();
+    }
+
+    static boolean syncOn(Context c) {
+        return sp(c).getBoolean("sync_on", true);
+    }
+
+    static void setSyncOn(Context c, boolean on) {
+        sp(c).edit().putBoolean("sync_on", on).apply();
+    }
+
+    static int classRemind(Context c) {
+        return sp(c).getInt("class_remind", 15);
+    }
+
+    static long lastSyncAt(Context c) {
+        return sp(c).getLong("last_sync", 0L);
+    }
+
+    static void setLastSyncAt(Context c, long t) {
+        sp(c).edit().putLong("last_sync", t).apply();
+    }
+
+    static String pendingChange(Context c) {
+        return sp(c).getString("pending_change", "");
+    }
+
+    static void setPendingChange(Context c, String json) {
+        sp(c).edit().putString("pending_change", json == null ? "" : json).apply();
+    }
+
+    static String attendFrom(Context c) {
+        return sp(c).getString("attend_from", "");
+    }
+
+    static void setAttendFrom(Context c, String key) {
+        sp(c).edit().putString("attend_from", key == null ? "" : key).apply();
+    }
+
+    static void setClassRemind(Context c, int m) {
+        sp(c).edit().putInt("class_remind", m).apply();
     }
 }

@@ -24,9 +24,13 @@ final class Agenda {
     private static final int NUDGE = 3;
     private static final int ASK = 4;
     private static final int AGAIN = 5;
+    private static final int EVENING = 6;
+    private static final int SYNC = 7;
 
     private static final long HOUR = 3600000L;
     private static final int LAST_ASK_MIN = 1410;
+    private static final int EVENING_MIN = 1260;
+    private static final int SYNC_MIN = 300;
 
     private static final class Ev {
         long time;
@@ -81,6 +85,16 @@ final class Agenda {
                 e.day = key;
                 out.add(e);
             }
+            Ev ev = new Ev();
+            ev.type = EVENING;
+            ev.time = at(day, EVENING_MIN).getTimeInMillis();
+            ev.day = key;
+            out.add(ev);
+            Ev sy = new Ev();
+            sy.type = SYNC;
+            sy.time = at(day, SYNC_MIN).getTimeInMillis();
+            sy.day = key;
+            out.add(sy);
             for (Db.Routine r : routines) {
                 if (!r.runsOn(day)) continue;
                 long endMs = at(day, r.endMin).getTimeInMillis();
@@ -153,6 +167,14 @@ final class Agenda {
             brief(c, now);
             return;
         }
+        if (e.type == EVENING) {
+            evening(c, e.day);
+            return;
+        }
+        if (e.type == SYNC) {
+            CalSync.run(c);
+            return;
+        }
         Db.Routine r = e.routine;
         if (Db.get(c).status(r.id, e.day) != 0) return;
         int id = notifId(r.id);
@@ -210,6 +232,26 @@ final class Agenda {
         return n;
     }
 
+    private static void evening(Context c, String key) {
+        Calendar day = Schedule.parseDay(key);
+        if (day == null) return;
+        List<Schedule.Block> open = Schedule.unresolved(c, day);
+        List<String> pending = pendingToday(c, 4);
+        StringBuilder body = new StringBuilder();
+        if (!open.isEmpty()) {
+            body.append("Confirm what happened today:\n");
+            for (Schedule.Block b : open) body.append(b.title).append(", ").append(Ui.clock(b.start)).append('\n');
+        }
+        if (!pending.isEmpty()) {
+            body.append("Practice still open:\n");
+            for (String p : pending) body.append(p).append('\n');
+        }
+        boolean marks = Attendance.on(c) && Attendance.hasClasses(c, day);
+        if (marks) body.append("Mark any classes you missed.\n");
+        if (open.isEmpty() && pending.isEmpty() && !marks) return;
+        Notify.open(c, 9200, "Evening check-in", body.toString().trim(), "confirm", key);
+    }
+
     private static void brief(Context c, long now) {
         Db db = Db.get(c);
         Calendar today = midnight(0);
@@ -235,10 +277,30 @@ final class Agenda {
             }
         }
         StringBuilder body = new StringBuilder();
+        Schedule.DayInfo info = Schedule.resolve(c, today);
+        StringBuilder classes = new StringBuilder();
+        StringBuilder cancelled = new StringBuilder();
+        int shown = 0;
+        for (Schedule.Block b : info.blocks) {
+            if (b.cancelled && b.cat.equals("class")) {
+                if (cancelled.length() > 0) cancelled.append(", ");
+                cancelled.append(b.title);
+            } else if (Schedule.isClass(b) && shown < 9) {
+                classes.append(Ui.clock(b.start)).append("  ").append(b.title).append('\n');
+                shown++;
+            }
+        }
+        if (!info.banner.isEmpty()) body.append(info.banner).append('\n');
+        if (classes.length() > 0) body.append("Classes\n").append(classes);
+        if (cancelled.length() > 0) body.append("Cancelled: ").append(cancelled).append('\n');
+        if (classes.length() == 0 && info.banner.isEmpty() && cancelled.length() == 0) {
+            body.append("No classes today.\n");
+        }
+        String warn = Attendance.warning(c);
+        if (!warn.isEmpty()) body.append(warn).append('\n');
         if (sb.length() > 0) body.append("Today\n").append(sb);
         if (pr.length() > 0) body.append("Practice\n").append(pr);
         if (overdue > 0) body.append("Overdue: ").append(overdue).append('\n');
-        if (body.length() == 0) body.append("Nothing on your list today. Want me to plan it?");
         String title = new SimpleDateFormat("'Your day,' EEE d MMM", Locale.getDefault()).format(new Date(now));
         Intent plan = Notify.home(c).putExtra("plan", true);
         Notify.post(c, Notify.BRIEF, 9000, title, body.toString().trim(), Notify.home(c),

@@ -160,6 +160,20 @@ public class EditRoutineActivity extends AppCompatActivity {
             Toast.makeText(this, "The slot must end after it starts.", Toast.LENGTH_LONG).show();
             return;
         }
+        String clash = Schedule.conflict(this, mask, startMin, endMin);
+        if (clash != null) {
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle("This overlaps your timetable")
+                    .setMessage(clash + "\n\nYou will get reminders during it.")
+                    .setPositiveButton("Save anyway", (d, w) -> store(t, mask))
+                    .setNegativeButton("Change the time", null)
+                    .show();
+            return;
+        }
+        store(t, mask);
+    }
+
+    private void store(String t, int mask) {
         Db.Routine r = new Db.Routine();
         r.id = id;
         r.title = t;

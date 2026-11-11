@@ -7,48 +7,12 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 final class Assistant {
-    private static final int SUMMARY_TRIGGER_TOKENS = 12000;
-    private static final int KEEP_RECENT = 6;
-
-    private static final Pattern NOTE = Pattern.compile("\\[\\[note:(.+?)\\]\\]", Pattern.DOTALL);
-    private static final Pattern EVENT = Pattern.compile("\\[\\[event:\\s*(\\{.*?\\})\\s*\\]\\]", Pattern.DOTALL);
-    private static final Pattern SECRET = Pattern.compile(
-            "(?i)(password|passcode|\\botp\\b|\\bcvv\\b|\\bpin\\b|card number|\\d{6,})");
-
-    private static final String RULES =
-            "\nTo remember a lasting fact or preference about the user, add a line at the very end of your reply: "
-                    + "[[note: the fact]]. Never store passwords, codes or card numbers.\n"
-                    + "When the user wants something scheduled, add a line at the very end: "
-                    + "[[event: {\"title\":\"...\",\"kind\":\"viva|task|other\",\"date\":\"yyyy-MM-dd\","
-                    + "\"time\":\"HH:mm\",\"remind\":[2880]}]] where remind lists minutes before the event, "
-                    + "and tell the user it is ready to review. These bracketed lines are hidden from the user.";
-
-    private static final String COMPRESS_PROMPT =
-            "You compress conversations. Write a compact factual summary that keeps every fact, decision and "
-                    + "open task needed to continue the conversation. Plain text, under 250 words.";
-
-    private static final String HANDOFF_PROMPT =
-            "Write a handoff summary of this conversation so the user can continue it in a new chat with any AI "
-                    + "without re-explaining. Cover the goal, key facts and decisions, current state, open questions "
-                    + "and next steps. Plain text, under 300 words.";
-
-    static final class Turn {
-        String error;
-        String reply;
-        Db.Item proposal;
-        boolean retry;
-        long retryMs;
-    }
 
     static final class Parsed {
         Db.Item item;
@@ -57,215 +21,94 @@ final class Assistant {
         long retryMs;
     }
 
+    private static final String PLAN_PROMPT =
+            "You plan the user's day on their phone. The schedule below lists fixed classes, meals, practice slots and "
+                    + "items, plus the free gaps. Keep every fixed block at its stated time. Fill the free gaps with the "
+                    + "user's extra requests, study or rest, and short breaks, and say plainly if something does not fit. "
+                    + "Plain text only: no markdown, no asterisks, no headings. One line per block like "
+                    + "'6:00 PM - 7:00 PM  Guitar practice'. At most 14 lines, then one line of advice.";
+
+    private static final String PHOTO_PROMPT =
+            "You read a photo of a weekly class timetable and return JSON only: "
+                    + "{\"slots\":[{\"day\":\"Mon\",\"start\":\"09:00\",\"end\":\"09:50\","
+                    + "\"type\":\"class|lab|tutorial|lunch|advisory\",\"code\":\"course code or empty\","
+                    + "\"name\":\"subject name or empty\",\"label\":\"short extra label or empty\","
+                    + "\"room\":\"room or empty\",\"optional\":false}]}. "
+                    + "Use 24-hour HH:mm times taken from the period header row. A cell spanning several periods is one "
+                    + "slot that starts at the first period and ends at the last period it covers. Lunch break cells have "
+                    + "type lunch and Advisory Hour cells have type advisory. Cells marked Tutorial have type tutorial. "
+                    + "Cells that say Lab have type lab. Skip empty cells. Never invent subjects.";
+
     private Assistant() {}
 
-    private static JSONArray single(String text) throws JSONException {
+    static JSONArray single(String text) throws JSONException {
         return new JSONArray().put(new JSONObject().put("role", "user")
                 .put("parts", new JSONArray().put(new JSONObject().put("text", text))));
     }
 
-    private static JSONArray contents(List<Db.Msg> msgs) throws JSONException {
-        List<String[]> merged = new ArrayList<>();
-        for (Db.Msg m : msgs) {
-            String role = "user".equals(m.role) ? "user" : "model";
-            if (merged.isEmpty() && !role.equals("user")) continue;
-            if (!merged.isEmpty() && merged.get(merged.size() - 1)[0].equals(role)) {
-                String[] last = merged.get(merged.size() - 1);
-                last[1] = last[1] + "\n\n" + m.body;
-            } else {
-                merged.add(new String[]{role, m.body});
-            }
-        }
-        JSONArray arr = new JSONArray();
-        for (String[] p : merged) {
-            arr.put(new JSONObject().put("role", p[0])
-                    .put("parts", new JSONArray().put(new JSONObject().put("text", p[1]))));
-        }
-        return arr;
-    }
-
-    private static String system(Context c) {
-        Db db = Db.get(c);
-        long now = System.currentTimeMillis();
-        StringBuilder sb = new StringBuilder();
-        sb.append("You are the user's personal assistant inside their phone app. Be brief, direct and practical.\n");
-        sb.append("Now: ").append(new SimpleDateFormat("EEEE, yyyy-MM-dd HH:mm", Locale.US).format(new Date(now)))
-                .append(" (").append(TimeZone.getDefault().getID()).append(").\n");
-
-        StringBuilder notes = new StringBuilder();
-        for (Db.Note n : db.notes()) {
-            int cap = n.body.startsWith("Handoff:") ? 3000 : 600;
-            String b = n.body.length() > cap ? n.body.substring(0, cap) : n.body;
-            if (notes.length() + b.length() > 8000) break;
-            notes.append("- ").append(b.replace('\n', ' ')).append('\n');
-        }
-        if (notes.length() > 0) sb.append("\nWhat you know about the user:\n").append(notes);
-
-        List<Db.Item> up = db.upcoming(now);
-        if (!up.isEmpty()) {
-            sb.append("\nUpcoming items:\n");
-            SimpleDateFormat f = new SimpleDateFormat("EEE d MMM HH:mm", Locale.US);
-            for (int i = 0; i < up.size() && i < 10; i++) {
-                Db.Item it = up.get(i);
-                sb.append("- ").append(it.kind).append(": ").append(it.title).append(", ")
-                        .append(f.format(new Date(it.start))).append('\n');
-            }
-        }
-
-        String summary = Prefs.summary(c);
-        if (!summary.isEmpty()) sb.append("\nSummary of the earlier conversation:\n").append(summary).append('\n');
-        sb.append(RULES);
-        return sb.toString();
-    }
-
-    private static void maybeSummarize(Context c) {
-        try {
-            Db db = Db.get(c);
-            List<Db.Msg> active = db.activeMsgs();
-            String prev = Prefs.summary(c);
-            int chars = prev.length();
-            for (Db.Msg m : active) chars += m.body.length();
-            if (chars / 4 < SUMMARY_TRIGGER_TOKENS || active.size() <= KEEP_RECENT + 2) return;
-
-            List<Db.Msg> old = active.subList(0, active.size() - KEEP_RECENT);
-            StringBuilder sb = new StringBuilder();
-            if (!prev.isEmpty()) sb.append("Previous summary:\n").append(prev).append("\n\n");
-            sb.append("Conversation to fold in:\n");
-            for (Db.Msg m : old) {
-                sb.append("user".equals(m.role) ? "User: " : "Assistant: ").append(m.body).append('\n');
-            }
-            Gemini.Result r = Gemini.call(c, COMPRESS_PROMPT, single(sb.toString()), false);
-            if (r.ok()) {
-                Prefs.setSummary(c, r.text);
-                db.markSummarized(old.get(old.size() - 1).id);
-            }
-        } catch (Exception ignored) {
-        }
-    }
-
-    static Turn respond(Context c) {
-        Turn t = new Turn();
-        synchronized (Queue.LOCK) {
-            try {
-                Db db = Db.get(c);
-                List<Db.Msg> active = db.activeMsgs();
-                if (!active.isEmpty() && "model".equals(active.get(active.size() - 1).role)) return t;
-                maybeSummarize(c);
-                Gemini.Result r = Gemini.call(c, system(c), contents(db.activeMsgs()), false);
-                if (!r.ok()) {
-                    t.error = r.error;
-                    t.retry = r.retryable();
-                    t.retryMs = r.retryMs;
-                    return t;
-                }
-                String raw = r.text;
-
-                Matcher nm = NOTE.matcher(raw);
-                int saved = 0;
-                while (nm.find() && saved < 3) {
-                    String n = nm.group(1).trim();
-                    if (!n.isEmpty() && !SECRET.matcher(n).find()) {
-                        db.addNoteIfNew(n);
-                        saved++;
-                    }
-                }
-
-                Matcher em = EVENT.matcher(raw);
-                if (em.find()) t.proposal = itemFromJson(new JSONObject(em.group(1)));
-
-                String clean = EVENT.matcher(NOTE.matcher(raw).replaceAll("")).replaceAll("").trim();
-                if (clean.isEmpty()) clean = "Done.";
-                db.addMsg("model", clean);
-                db.deleteJobs("chat");
-                t.reply = clean;
-            } catch (Exception e) {
-                t.error = "Something went wrong. Please try again.";
-            }
-        }
-        return t;
-    }
-
-    static Gemini.Result handoff(Context c) {
+    static Gemini.Result plan(Context c, String extra) {
         Gemini.Result none = new Gemini.Result();
         try {
-            List<Db.Msg> msgs = Db.get(c).activeMsgs();
-            String summary = Prefs.summary(c);
-            if (msgs.isEmpty() && summary.isEmpty()) {
-                none.error = "Nothing to summarize yet.";
-                return none;
-            }
+            long now = System.currentTimeMillis();
             StringBuilder sb = new StringBuilder();
-            if (!summary.isEmpty()) sb.append("Earlier summary:\n").append(summary).append("\n\n");
-            sb.append("Conversation:\n");
-            for (Db.Msg m : msgs) {
-                sb.append("user".equals(m.role) ? "User: " : "Assistant: ").append(m.body).append('\n');
-            }
-            return Gemini.call(c, HANDOFF_PROMPT, single(sb.toString()), false);
+            sb.append("Now: ").append(new SimpleDateFormat("EEEE, yyyy-MM-dd h:mm a", Locale.US).format(new Date(now)))
+                    .append(" (").append(TimeZone.getDefault().getID()).append(").\n\n");
+            sb.append("Schedule:\n").append(Schedule.planText(c, Calendar.getInstance(), true)).append('\n');
+            String about = Prefs.aboutMe(c);
+            if (!about.isEmpty()) sb.append("\nAbout the user: ").append(about.replace('\n', ' ')).append('\n');
+            String ask = extra == null ? "" : extra.trim();
+            sb.append("\nExtra requests for today: ").append(ask.isEmpty() ? "none" : ask).append('\n');
+            return Gemini.call(c, PLAN_PROMPT, single(sb.toString()), false);
         } catch (Exception e) {
             none.error = "Something went wrong. Please try again.";
             return none;
         }
     }
 
-    private static final String PLAN_PROMPT =
-            "You plan the user's day on their phone. Build a realistic time-blocked plan from now until bedtime "
-                    + "(assume 23:00 unless the notes say otherwise). Keep every fixed item and practice slot at its "
-                    + "stated time. Fit the user's extra requests into free time, add short breaks and meals, and say "
-                    + "plainly if something does not fit. Plain text only: no markdown, no asterisks, no headings. "
-                    + "One line per block like '6:00 PM - 7:00 PM  Guitar practice'. At most 14 lines, then one line "
-                    + "of advice.";
-
-    static Gemini.Result plan(Context c, String extra) {
+    static Gemini.Result change(Context c, String text) {
         Gemini.Result none = new Gemini.Result();
         try {
-            Db db = Db.get(c);
-            long now = System.currentTimeMillis();
-            Calendar day = Calendar.getInstance();
-            day.set(Calendar.HOUR_OF_DAY, 0);
-            day.set(Calendar.MINUTE, 0);
-            day.set(Calendar.SECOND, 0);
-            day.set(Calendar.MILLISECOND, 0);
-            long dayStart = day.getTimeInMillis();
-            Calendar next = (Calendar) day.clone();
-            next.add(Calendar.DAY_OF_MONTH, 1);
-            long dayEnd = next.getTimeInMillis();
-            String key = Agenda.dayKey(dayStart);
-            SimpleDateFormat tf = new SimpleDateFormat("h:mm a", Locale.US);
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("Now: ").append(new SimpleDateFormat("EEEE, yyyy-MM-dd h:mm a", Locale.US).format(new Date(now)))
-                    .append(" (").append(TimeZone.getDefault().getID()).append(").\n");
-
-            StringBuilder fixed = new StringBuilder();
-            for (Db.Item it : db.open()) {
-                if (it.start >= dayEnd) continue;
-                fixed.append("- ").append(it.kind).append(": ").append(it.title).append(", ")
-                        .append(it.start < dayStart ? "overdue" : tf.format(new Date(it.start))).append('\n');
+            StringBuilder subs = new StringBuilder();
+            for (Db.Subject s : Db.get(c).subjects()) {
+                subs.append("- ").append(s.code).append(": ").append(s.name).append(" (").append(s.kind).append(")\n");
             }
-            sb.append("\nFixed items:\n").append(fixed.length() > 0 ? fixed.toString() : "none\n");
+            String now = new SimpleDateFormat("EEEE, yyyy-MM-dd HH:mm", Locale.US).format(new Date());
+            String sys = "You turn a student's short message about their class timetable and daily schedule into JSON. "
+                    + "Now: " + now + " (" + TimeZone.getDefault().getID() + "). Resolve relative dates from now. "
+                    + "Subjects (use the exact code in the subject field):\n" + subs
+                    + "Reply with JSON only: {\"changes\":[...]} where each change is one of:\n"
+                    + "{\"op\":\"cancel\",\"date\":\"yyyy-MM-dd\",\"subject\":\"code or empty\",\"period\":0,\"weekly\":false}\n"
+                    + "{\"op\":\"move\",\"date\":\"yyyy-MM-dd\",\"subject\":\"code or empty\",\"period\":0,\"start\":\"HH:mm\",\"end\":\"HH:mm\",\"weekly\":false}\n"
+                    + "{\"op\":\"holiday\",\"from\":\"yyyy-MM-dd\",\"to\":\"yyyy-MM-dd\",\"note\":\"\"}\n"
+                    + "{\"op\":\"exam\",\"from\":\"yyyy-MM-dd\",\"to\":\"yyyy-MM-dd\",\"note\":\"\"}\n"
+                    + "{\"op\":\"normal\",\"from\":\"yyyy-MM-dd\",\"to\":\"yyyy-MM-dd\"}\n"
+                    + "{\"op\":\"follow\",\"date\":\"yyyy-MM-dd\",\"weekday\":\"Monday to Friday name\"}\n"
+                    + "{\"op\":\"meal\",\"meal\":\"breakfast|lunch|dinner\",\"date\":\"yyyy-MM-dd or empty for every week\","
+                    + "\"days\":\"all|weekdays|weekend\",\"start\":\"HH:mm\",\"end\":\"HH:mm\",\"skip\":false}\n"
+                    + "{\"op\":\"taken\",\"date\":\"yyyy-MM-dd\",\"slot\":\"lunch|advisory|tutorial|period number\",\"subject\":\"code\"}\n"
+                    + "{\"op\":\"free\",\"date\":\"yyyy-MM-dd\",\"slot\":\"lunch|advisory|tutorial|period number\"}\n"
+                    + "{\"op\":\"attend\",\"date\":\"yyyy-MM-dd\"}\n"
+                    + "{\"op\":\"rename\",\"from\":\"code or name\",\"to\":\"new name\"}\n"
+                    + "Use empty strings and 0 when unknown. Periods are numbered 1 to 9 from 9:00 AM. "
+                    + "\"No class\" or \"class cancelled\" is cancel. \"Faculty took lunch\" is taken. "
+                    + "Set weekly true only when the user says every week or from now on. "
+                    + "If the message is none of these, reply {\"changes\":[]}.";
+            return Gemini.call(c, sys, single(text), true);
+        } catch (Exception e) {
+            none.error = "Something went wrong. Please try again.";
+            return none;
+        }
+    }
 
-            StringBuilder practice = new StringBuilder();
-            for (Db.Routine r : db.routines()) {
-                if (!r.runsOn(day)) continue;
-                practice.append("- ").append(r.title).append(", ").append(Ui.clock(r.startMin)).append(" to ")
-                        .append(Ui.clock(r.endMin));
-                if (db.status(r.id, key) == 1) practice.append(" (already done)");
-                practice.append('\n');
-            }
-            sb.append("\nDaily practice slots today:\n").append(practice.length() > 0 ? practice.toString() : "none\n");
-
-            StringBuilder notes = new StringBuilder();
-            for (Db.Note n : db.notes()) {
-                if (n.body.startsWith("Handoff:")) continue;
-                String b = n.body.length() > 300 ? n.body.substring(0, 300) : n.body;
-                if (notes.length() + b.length() > 1500) break;
-                notes.append("- ").append(b.replace('\n', ' ')).append('\n');
-            }
-            if (notes.length() > 0) sb.append("\nWhat you know about the user:\n").append(notes);
-
-            String ask = extra == null ? "" : extra.trim();
-            sb.append("\nExtra requests for today: ").append(ask.isEmpty() ? "none" : ask).append('\n');
-            return Gemini.call(c, PLAN_PROMPT, single(sb.toString()), false);
+    static Gemini.Result photo(Context c, String jpegBase64) {
+        Gemini.Result none = new Gemini.Result();
+        try {
+            JSONArray parts = new JSONArray()
+                    .put(new JSONObject().put("text", "Read this timetable."))
+                    .put(new JSONObject().put("inlineData",
+                            new JSONObject().put("mimeType", "image/jpeg").put("data", jpegBase64)));
+            JSONArray contents = new JSONArray().put(new JSONObject().put("role", "user").put("parts", parts));
+            return Gemini.call(c, PHOTO_PROMPT, contents, true);
         } catch (Exception e) {
             none.error = "Something went wrong. Please try again.";
             return none;

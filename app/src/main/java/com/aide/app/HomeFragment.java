@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 
 public class HomeFragment extends Fragment {
+    private TextView todayBody;
     private TextView greeting;
     private TextView date;
     private TextView nextRel;
@@ -73,6 +74,12 @@ public class HomeFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View v, @Nullable Bundle b) {
         super.onViewCreated(v, b);
+        todayBody = v.findViewById(R.id.today_body);
+        v.findViewById(R.id.today_open).setOnClickListener(x -> {
+            if (getActivity() instanceof MainActivity) ((MainActivity) getActivity()).openTimetable();
+        });
+        v.findViewById(R.id.today_attendance).setOnClickListener(x ->
+                startActivity(new Intent(requireContext(), AttendanceActivity.class)));
         greeting = v.findViewById(R.id.greeting);
         date = v.findViewById(R.id.date);
         nextRel = v.findViewById(R.id.next_rel);
@@ -171,6 +178,7 @@ public class HomeFragment extends Fragment {
         LayoutInflater inf = LayoutInflater.from(c);
         refreshPractice(c, inf, db);
         refreshPlan(c);
+        todayBody.setText(Schedule.planText(c, now, true));
 
         List<Db.Item> items = db.open();
         list.removeAllViews();

@@ -39,6 +39,9 @@ public class SettingsActivity extends AppCompatActivity {
     private ChipGroup screenGroup;
     private Button briefTime;
     private Button usageBtn;
+    private MaterialSwitch syncSwitch;
+    private TextInputEditText remind;
+    private TextInputEditText about;
 
     private final ActivityResultLauncher<String[]> perms =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), r -> loadCalendars());
@@ -62,6 +65,13 @@ public class SettingsActivity extends AppCompatActivity {
         screenGroup = findViewById(R.id.screen_group);
         briefTime = findViewById(R.id.btn_brief_time);
         usageBtn = findViewById(R.id.btn_usage);
+        syncSwitch = findViewById(R.id.sw_sync);
+        remind = findViewById(R.id.remind);
+        about = findViewById(R.id.about);
+        syncSwitch.setChecked(Prefs.syncOn(this));
+        remind.setText(String.valueOf(Prefs.classRemind(this)));
+        about.setText(Prefs.aboutMe(this));
+        findViewById(R.id.btn_meals).setOnClickListener(v -> startActivity(new Intent(this, MealsActivity.class)));
 
         briefSwitch.setChecked(Prefs.briefOn(this));
         briefMin = Prefs.briefMin(this);
@@ -167,9 +177,21 @@ public class SettingsActivity extends AppCompatActivity {
         if (selected >= 0 && selected < cals.size()) Prefs.setCalendarId(this, cals.get(selected).id);
         Prefs.setBrief(this, briefSwitch.isChecked(), briefMin);
         Prefs.setScreen(this, screenSwitch.isChecked(), screenMinutes());
+        int rm;
+        try {
+            rm = Integer.parseInt(remind.getText() == null ? "" : remind.getText().toString().trim());
+        } catch (NumberFormatException e) {
+            rm = 15;
+        }
+        Prefs.setClassRemind(this, Math.max(0, Math.min(180, rm)));
+        Prefs.setSyncOn(this, syncSwitch.isChecked());
+        Prefs.setAboutMe(this, about.getText() == null ? "" : about.getText().toString());
         Usage.apply(this);
         android.content.Context app = getApplicationContext();
-        Bg.run(() -> Agenda.rearm(app));
+        Bg.run(() -> {
+            Agenda.rearm(app);
+            CalSync.run(app);
+        });
         Toast.makeText(this, "Saved", Toast.LENGTH_SHORT).show();
         finish();
     }

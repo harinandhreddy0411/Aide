@@ -46,10 +46,12 @@ public class MainActivity extends AppCompatActivity {
             show(item.getItemId());
             return true;
         });
-        if ("chat".equals(getIntent().getStringExtra("tab"))) {
-            nav.setSelectedItemId(R.id.nav_chat);
-        } else if (b == null) {
-            show(R.id.nav_home);
+        if (b == null) {
+            if (wantsTimetable(getIntent())) {
+                nav.setSelectedItemId(R.id.nav_timetable);
+            } else {
+                show(R.id.nav_home);
+            }
         }
         askPermissions();
         Usage.apply(this);
@@ -59,11 +61,15 @@ public class MainActivity extends AppCompatActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if ("chat".equals(intent.getStringExtra("tab"))) nav.setSelectedItemId(R.id.nav_chat);
-        if (intent.hasExtra("voice") || intent.hasExtra("plan")) nav.setSelectedItemId(R.id.nav_home);
+        if (wantsTimetable(intent)) {
+            nav.setSelectedItemId(R.id.nav_timetable);
+        } else if (intent.hasExtra("voice") || intent.hasExtra("plan")) {
+            nav.setSelectedItemId(R.id.nav_home);
+        }
         Fragment f = getSupportFragmentManager().findFragmentById(R.id.container);
-        if (f instanceof HomeFragment && getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
-            ((HomeFragment) f).consumeIntent();
+        if (getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) {
+            if (f instanceof HomeFragment) ((HomeFragment) f).consumeIntent();
+            if (f instanceof TimetableFragment) ((TimetableFragment) f).consumeIntent();
         }
     }
 
@@ -71,7 +77,18 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         android.content.Context app = getApplicationContext();
-        Bg.run(() -> Agenda.tick(app));
+        Bg.run(() -> {
+            Agenda.tick(app);
+            CalSync.maybe(app);
+        });
+    }
+
+    private static boolean wantsTimetable(Intent i) {
+        return i != null && (i.hasExtra("confirm") || i.hasExtra("review"));
+    }
+
+    void openTimetable() {
+        nav.setSelectedItemId(R.id.nav_timetable);
     }
 
     private void askPermissions() {
@@ -87,12 +104,9 @@ public class MainActivity extends AppCompatActivity {
     private void show(int id) {
         Fragment f;
         String title;
-        if (id == R.id.nav_chat) {
-            f = new ChatFragment();
-            title = "Assistant";
-        } else if (id == R.id.nav_notes) {
-            f = new NotesFragment();
-            title = "Notes";
+        if (id == R.id.nav_timetable) {
+            f = new TimetableFragment();
+            title = "Timetable";
         } else {
             f = new HomeFragment();
             title = getString(R.string.app_name);
